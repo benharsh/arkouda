@@ -20,6 +20,8 @@ module SparseMatrixMsg {
     private config const logChannel = ServerConfig.logChannel;
     const sparseLogger = new Logger(logLevel, logChannel);
 
+    import SparseMatrix.aggregatedSparseMatrixCreation;
+
     @arkouda.instantiateAndRegister("random_sparse_matrix")
     proc randomSparseMatrix(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab,
                             type SparseSymEntry_etype, param SparseSymEntry_matLayout: Layout
@@ -35,11 +37,19 @@ module SparseMatrixMsg {
     proc sparseMatrixMatrixMultMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab,
                                    type SparseSymEntry_etype
     ): MsgTuple throws {
-        const e1 = st[msgArgs["arg1"]]: borrowed SparseSymEntry(SparseSymEntry_etype, 2, Layout.CSC),
-              e2 = st[msgArgs["arg2"]]: borrowed SparseSymEntry(SparseSymEntry_etype, 2, Layout.CSR);
+        if !aggregatedSparseMatrixCreation {
+            const e1 = st[msgArgs["arg1"]]: borrowed SparseSymEntry(SparseSymEntry_etype, 2, Layout.CSC),
+                  e2 = st[msgArgs["arg2"]]: borrowed SparseSymEntry(SparseSymEntry_etype, 2, Layout.CSR);
 
-        const aV = sparseMatMatMult(e1.a, e2.a);
-        return st.insert(new shared SparseSymEntry(aV, Layout.CSR));
+            const aV = sparseMatMatMult(e1.a, e2.a);
+            return st.insert(new shared SparseSymEntry(aV, Layout.CSR));
+        } else {
+            const e1 = st[msgArgs["arg1"]]: borrowed ParSafeSparseSymEntry(SparseSymEntry_etype, 2, Layout.CSC),
+                  e2 = st[msgArgs["arg2"]]: borrowed ParSafeSparseSymEntry(SparseSymEntry_etype, 2, Layout.CSR);
+
+            const aV = sparseMatMatMult(e1.a, e2.a);
+            return st.insert(new shared ParSafeSparseSymEntry(aV, Layout.CSR));
+        }
     }
 
     @arkouda.instantiateAndRegister("sparse_to_pdarrays")
@@ -86,7 +96,11 @@ module SparseMatrixMsg {
               shape = msgArgs["shape"].toScalarTuple(int, 2); // Hardcode 2D for now
 
         const aV = sparseMatFromArrays(rows.a, cols.a, vals.a, shape, SparseSymEntry_matLayout, SparseSymEntry_etype);
-        return st.insert(new shared SparseSymEntry(aV, SparseSymEntry_matLayout));
+
+        if !aggregatedSparseMatrixCreation then
+            return st.insert(new shared SparseSymEntry(aV, SparseSymEntry_matLayout));
+        else
+            return st.insert(new shared ParSafeSparseSymEntry(aV, SparseSymEntry_matLayout));
     }
 
 }

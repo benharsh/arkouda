@@ -738,6 +738,181 @@ module MultiTypeSymEntry
         }
     }
 
+    use CompressedSparseLayout;
+    
+    proc getParSafeSparseDom(param layout: Layout) {
+        select layout {
+            when Layout.CSR do return new csrLayout(parSafe=true);
+            when Layout.CSC do return new cscLayout(parSafe=true);
+        }
+    }
+
+    proc getParSafeDenseDom(dom, localeGrid, param layout: Layout) {
+        if layout == Layout.CSR {
+            return dom dmapped new blockDist(boundingBox=dom,
+                                             targetLocales=localeGrid,
+                                             sparseLayoutType=csrLayout(parSafe=true));
+        } else {
+            return dom dmapped new blockDist(boundingBox=dom,
+                                             targetLocales=localeGrid,
+                                             sparseLayoutType=cscLayout(parSafe=true));
+        }
+    }
+
+    proc makeParSafeSparseDomain(shape: 2*int, param matLayout: Layout) {
+      const dom = {1..shape[0], 1..shape[1]}; // TODO: change domain to be zero based?
+      select MyDmap {
+        when Dmap.defaultRectangular {
+          var spsDom: sparse subdomain(dom) dmapped getParSafeSparseDom(matLayout);
+          return (spsDom, dom);
+        }
+        when Dmap.blockDist {
+          const locsPerDim = sqrt(numLocales:real): int,
+                grid = {0..<locsPerDim, 0..<locsPerDim},
+                localeGrid = reshape(Locales[0..<grid.size], grid);
+
+          const DenseBlkDom = getParSafeDenseDom(dom, localeGrid, matLayout);
+
+          var SD: sparse subdomain(DenseBlkDom);
+          return (SD, DenseBlkDom);
+        }
+      }
+    }
+    
+    proc makeParSafeSparseArray(m: int, n: int, type eltType, param matLayout: Layout) {
+        const (sd, _) = makeParSafeSparseDomain((m, n), matLayout);
+        var arr: [sd] eltType;
+        return arr;
+    }
+
+    /* Symbol table entry */
+    class ParSafeSparseSymEntry : GenSparseSymEntry
+    {
+        /*
+        generic element type array
+        etype is different from dtype (chapel vs numpy)
+        */
+        type etype;
+
+        /*
+        number of dimensions, to be passed back to the `GenSparseSymEntry` so that
+        we are able to make it visible to the Python client
+        */
+        param dimensions: int; // TODO: should we only support 2D sparse arrays and remove this field?
+
+        /*
+        the actual shape of the array, this has to live here, since GenSparseSymEntry
+        has to stay generic
+        For now, each dimension is assumed to be equal.
+        */
+        var tupShape: dimensions*int;
+
+        /*
+        layout of the sparse array: CSC or CSR
+        */
+        param matLayout : Layout;
+
+        /*
+        'a' is the distributed sparse array
+        */
+        // Hardcode 2D matrix for now (makeSparseArray accepts a 2-tuple shape)
+        var a = makeParSafeSparseArray((...tupShape), etype, matLayout);
+
+        /*
+          Create a SparseSymEntry from a sparse array
+        */
+        proc init(a: [?D] ?eltType, param matLayout)
+            where a.domain.parentDom.rank == 2 // Hardcode a 2D matrix for now
+        {
+            const size = D.shape[0] * D.shape[1];
+            super.init(eltType, size, a.domain.getNNZ(), /*ndim*/2, layoutToStr(matLayout)); // Hardcode a 2D matrix for now
+            this.entryType = SymbolEntryType.SparseSymEntry;
+            assignableTypes.add(this.entryType);
+            this.etype = eltType;
+            this.dimensions = 2; // Hardcode a 2D matrix for now
+            this.tupShape = D.shape;
+            this.matLayout = matLayout;
+            this.a = a;
+            init this;
+            this.shape = tupShapeString(this.tupShape);
+            this.ndim = 2;
+        }
+
+        /*
+        Formats and returns data in this entry up to the specified threshold.
+        Matrices with nnz less than threshold will be printed in their entirety.
+        Matrices with nnz greater than or equal to threshold will print the first 3 and last 3 elements
+
+            :arg thresh: threshold for data to return
+            :type thresh: int
+
+            :arg prefix: String to pre-pend to the front of the data string
+            :type prefix: string
+
+            :arg suffix: String to append to the tail of the data string
+            :type suffix: string
+
+            :arg baseFormat: String which represents the base format string for the data type
+            :type baseFormat: string
+
+            :returns: s (string) containing the array data
+        */
+        override proc entry__str__(thresh:int=6, prefix:string = "noprefix", suffix:string = "nosuffix", baseFormat:string = "%?"): string throws {
+            var s:string;
+            const ref sparseDom = this.a.domain,
+                        denseDom = sparseDom.parentDom;
+            if this.a.domain.getNNZ() >= thresh {
+                var count = 0;
+                // Normal iteration like this is more efficient than
+                // dense iteration, so we prefer that for the first elements
+                for (_, (i, j)) in zip(1..3, sparseDom) {
+                    const idxStr = "  (%?, %?)".format(i, j); // Padding to match SciPy
+                    s += "%<16s%?\n".format(idxStr, this.a[i,j]);
+                }
+
+                s += "  :     :\n"; // Dot dot seperator, but vertical
+
+                // For the last elements, we iterate in dense order
+                // Since sparseArrays cant be strided by -1
+                // We also have to do some i,j swaps for CSC vs CSR differences
+                count = 0;
+                var backString = "";
+                for (i, j) in denseDom by -1 {
+                    var row = i, col = j;
+                    if this.matLayout==Layout.CSC {
+                        row = j; // Iterate in Col Major Order for CSC
+                        col = i; // To match SciPy behavior
+                    }
+                    if !sparseDom.contains(row, col) then continue;
+                    const idxStr = "  (%?, %?)".format(row, col); // Padding to match SciPy
+                    backString = "%<16s%?\n".format(idxStr, this.a[row,col]) + backString;
+                    count += 1;
+                    if count == 3 then break;
+                }
+                s+=backString;
+            } else {
+                for (i,j) in sparseDom {
+                    const idxStr = "  (%?, %?)".format(i, j); // Padding to match SciPy
+                    s += "%<16s%?\n".format(idxStr, this.a[i,j]);
+                }
+            }
+
+            if this.etype == bool {
+                s = s.replace("true","True");
+                s = s.replace("false","False");
+            }
+
+            return s;
+        }
+
+        /*
+        Verbose flag utility method
+        */
+        proc deinit() {
+            if logLevel == LogLevel.DEBUG {writeln("deinit SparseSymEntry");try! stdout.flush();}
+        }
+    }
+
 
     class GeneratorSymEntry:AbstractSymEntry {
         type etype;

@@ -3,7 +3,11 @@ module SparseMatrix {
   public use SpsMatUtil;
   use ArkoudaSparseMatrixCompat;
   use BlockDist;
+  use CompressedSparseLayout;
   use CommAggregation;
+  use CustomCopyAggregation;
+
+  config param aggregatedSparseMatrixCreation = true;
 
   // Quick and dirty, not permanent
   proc fillSparseMatrix(ref spsMat, const A: [?D] ?eltType, param l: Layout) throws {
@@ -416,7 +420,8 @@ module SparseMatrix {
         // using them and the spsData computed above.
         //
         const locInds = A.domain.parentDom.localSubdomain();
-        var cBlk = makeSparseMat(locInds, spsData);
+        var cBlk = if !aggregatedSparseMatrixCreation then makeSparseMat(locInds, spsData)
+                   else makeParSafeSparseMat(locInds, spsData);
 
         // Stitch the local portions back together into the global-view
         //
@@ -470,7 +475,6 @@ module SparseMatrix {
   proc sparseMatFromArrays(rows, cols, vals, shape: 2*int, param layout,
                            type eltType) throws {
     import SymArrayDmap.makeSparseDomain;
-    var (SD, dense) = makeSparseDomain(shape, layout);
 
     const minRow = min reduce rows;
     const maxRow = max reduce rows;
@@ -497,10 +501,17 @@ module SparseMatrix {
         errorClass="InvalidArgumentError"
         );
 
-    var A: [SD] eltType;
-    addElementsToSparseArray(A, SD, rows, cols, vals);
-
-    return A;
+    if !aggregatedSparseMatrixCreation {
+      var (SD, dense) = makeSparseDomain(shape, layout);
+      var A: [SD] eltType;
+      addElementsToSparseArray(A, SD, rows, cols, vals);
+      return A;
+    } else {
+      var (SD, dense) = makeParSafeSparseDomain(shape, layout);
+      var A: [SD] eltType;
+      addElementsToSparseArray(A, SD, rows, cols, vals);
+      return A;
+    }
   }
 
   proc addElementsToSparseArray(ref A, ref SD, const ref rows,const ref cols,
@@ -520,36 +531,93 @@ module SparseMatrix {
     }
   }
 
+  use ChplConfig;
+  config param bufSize = 1024;
+
+  class DestinationHandler {
+    var domVal;
+    var arrVal;
+
+    proc init(domVal, arrVal) {
+      this.domVal = domVal;
+      this.arrVal = arrVal;
+    }
+
+    inline proc flush(ref rBuffer, const ref remBufferPtr, const ref myBufferIdx) {
+      const (_, locid) = this.domVal.dist.chpl__locToLocIdx(here);
+      var locIdxBuf = this.domVal.locDoms[locid]!.mySparseBlock._value.createIndexBuffer(bufSize,true,true);
+      for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
+        assert(dstAddr == nil);
+        var (i,j,_) = srcVal;
+        locIdxBuf.add((i, j));
+      }
+      locIdxBuf.commit();
+      for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
+        assert(dstAddr == nil);
+        var (i,j,v) = srcVal;
+        var (_,loc) = this.domVal.locDoms[locid]!.mySparseBlock._value.find((i,j));
+        this.arrVal.locArr[locid]!.myElems._value.data[loc] = v;
+      }
+    }
+  }
+
+  class SourceHandler {
+    var domVal;
+    var arrVal;
+    type elemType = (int,int,int);
+
+    proc init(D, A) {
+      this.domVal = D._value;
+      this.arrVal = A._value;
+    }
+
+    proc sourceCopy() {
+      return new unmanaged DestinationHandler(domVal,arrVal);
+    }
+
+    proc getDestinationLocale(val: elemType) {
+      // Since elemType is a tuple of (i,j,v) then we only need (i,j)
+      var (i,j,_) = val;
+      return domVal.dist.dsiIndexToLocale((i,j));
+    }
+  }
 
   proc addElementsToSparseArray(ref A, ref SD, const ref rows, const ref cols,
                                 const ref vals) throws where
                                 !A.chpl_isNonDistributedArray() {
-    coforall (loc, locDom) in zip(getGrid(A),
-                                  SD._value.locDoms) {
-      on loc {
-        for _srcLocId in loc.id..#numLocales {
-          const srcLocId = _srcLocId % numLocales;
-          var rowChunk = rows[rows.localSubdomain(Locales[srcLocId])];
-          var colChunk = cols[rows.localSubdomain(Locales[srcLocId])];
-          var valChunk = vals[rows.localSubdomain(Locales[srcLocId])];
-          for (r,c,v) in zip(rowChunk, colChunk, valChunk) {
-            if locDom!.parentDom.contains(r,c) {
-              if locDom!.mySparseBlock.contains(r,c) then
-                throw getErrorWithContext(
-                  msg="Duplicate index (%i, %i) in sparse matrix".format(r, c),
-                  lineNumber=getLineNumber(),
-                  routineName=getRoutineName(),
-                  moduleName=getModuleName(),
-                  errorClass="InvalidArgumentError"
-                  );
+    
+    if !aggregatedSparseMatrixCreation {
+      coforall (loc, locDom) in zip(getGrid(A),
+                                    SD._value.locDoms) {
+        on loc {
+          for _srcLocId in loc.id..#numLocales {
+            const srcLocId = _srcLocId % numLocales;
+            var rowChunk = rows[rows.localSubdomain(Locales[srcLocId])];
+            var colChunk = cols[rows.localSubdomain(Locales[srcLocId])];
+            var valChunk = vals[rows.localSubdomain(Locales[srcLocId])];
+            for (r,c,v) in zip(rowChunk, colChunk, valChunk) {
+              if locDom!.parentDom.contains(r,c) {
+                if locDom!.mySparseBlock.contains(r,c) then
+                  throw getErrorWithContext(
+                    msg="Duplicate index (%i, %i) in sparse matrix".format(r, c),
+                    lineNumber=getLineNumber(),
+                    routineName=getRoutineName(),
+                    moduleName=getModuleName(),
+                    errorClass="InvalidArgumentError"
+                    );
 
 
-              locDom!.mySparseBlock += (r,c);
-              A[r,c] = v;
+                locDom!.mySparseBlock += (r,c);
+                A[r,c] = v;
+              }
             }
           }
         }
       }
+    } else {
+      forall (i,j,v) in zip(rows, cols, vals) 
+        with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A))) do 
+          agg.copy((i,j,v));
     }
 
   }
@@ -618,6 +686,29 @@ module SparseMatrix {
       use Sort;
 
       var CDom: sparse subdomain(parentDom) dmapped getSparseDom(Layout.CSR);
+      var inds: [0..<spsData.size] 2*int;
+      for (idx, i) in zip(spsData.keys(), 0..) do
+        inds[i] = idx;
+
+      sort(inds);
+
+      for ij in inds do
+        CDom += ij;
+
+      var C: [CDom] int;
+      for ij in inds do
+        try! C[ij] += spsData[ij];  // TODO: Should this really throw?
+
+      return C;
+    }
+
+    // create a new sparse matrix from a map from sparse indices to values
+    //
+    proc makeParSafeSparseMat(parentDom, spsData) {
+      use ArkoudaSparseMatrixCompat;
+      use Sort;
+
+      var CDom: sparse subdomain(parentDom) dmapped getParSafeSparseDom(Layout.CSR);
       var inds: [0..<spsData.size] 2*int;
       for (idx, i) in zip(spsData.keys(), 0..) do
         inds[i] = idx;
