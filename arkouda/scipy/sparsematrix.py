@@ -11,12 +11,64 @@ from arkouda.core.logger import get_arkouda_logger
 from arkouda.numpy.dtypes import NumericDTypes, int64
 from arkouda.numpy.dtypes import dtype as akdtype
 from arkouda.numpy.pdarrayclass import pdarray
+from arkouda.numpy.pdarraysetops import concatenate
 from arkouda.scipy.sparrayclass import create_sparray, sparray
+from arkouda.numpy.pdarraycreation import zeros
+from arkouda.random import randint
+from arkouda.sorting import argsort
+from arkouda.pandas.groupbyclass import unique
 
 
-__all__ = ["random_sparse_matrix", "sparse_matrix_matrix_mult", "create_sparse_matrix"]
+__all__ = [
+    "rmat",
+    "random_sparse_matrix", 
+    "sparse_matrix_matrix_mult", 
+    "create_sparse_matrix"
+    ]
 
 logger = get_arkouda_logger(name="sparsematrix")
+
+@typechecked
+def rmat(
+    scale: int,
+    a = 0.57, b = 0.19, c = 0.19, d = 0.05, 
+    edge_factor = 16
+) -> tuple[pdarray,pdarray]:
+    p = (a,b,c,d)
+    n = 2 ** scale              # number vertices
+    m = n * edge_factor         # number edges
+
+    if isinstance(p, float) and 0 <= p <= 1:
+        a = p
+        b = c = d = (1.0 - p) / 3.0
+    elif isinstance(p, tuple) and all(0 <= x <= 1 for x in p) and sum(p) == 1:
+        a, b, c, d = p
+    else:
+        raise ValueError(f"p = {p} doesn't represent valid RMAT probability.")
+    
+    ab, cNorm, aNorm = a + b, c / (c + d), a / (a + b)
+
+    U, V = zeros(m, dtype="int64"), zeros(m, dtype="int64")
+
+    for s in range(0, scale):
+        uMask = randint(0, 1, m, dtype="float64") > ab
+        vMask = (randint(0, 1, m, dtype="float64") > 
+                 (cNorm * uMask + aNorm * (~uMask))
+                )
+        U += uMask * (2 ** s)
+        V += vMask * (2 ** s)
+    
+    pi = argsort(randint(0, 1, n, dtype="float64"))
+    U, V = pi[U], pi[V]
+
+    Us = concatenate([U,V])
+    Vs = concatenate([V,U])
+
+    U,V = unique([Us, Vs])
+    U += 1
+    V += 1
+
+    return (U,V)
 
 
 @typechecked
