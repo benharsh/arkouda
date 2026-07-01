@@ -14,8 +14,8 @@ from arkouda.numpy.pdarrayclass import pdarray
 from arkouda.numpy.pdarraysetops import concatenate
 from arkouda.scipy.sparrayclass import create_sparray, sparray
 from arkouda.numpy.pdarraycreation import zeros
-from arkouda.random import randint
-from arkouda.sorting import argsort
+from arkouda.numpy.random import randint
+from arkouda.numpy.sorting import argsort
 from arkouda.pandas.groupbyclass import unique
 
 
