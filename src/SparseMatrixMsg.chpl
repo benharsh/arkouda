@@ -56,7 +56,11 @@ module SparseMatrixMsg {
     proc sparseMatrixtoPdarray(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab,
                                type SparseSymEntry_etype, param SparseSymEntry_matLayout: Layout
     ): MsgTuple throws {
-        const e = st[msgArgs["matrix"]]: borrowed SparseSymEntry(SparseSymEntry_etype, 2, SparseSymEntry_matLayout);
+        type castTo = if aggregatedSparseMatrixCreation then
+                        borrowed ParSafeSparseSymEntry(SparseSymEntry_etype, 2, SparseSymEntry_matLayout)
+                      else
+                        borrowed SparseSymEntry(SparseSymEntry_etype, 2, SparseSymEntry_matLayout);
+        const e = st[msgArgs["matrix"]]: castTo;
 
         const size = e.nnz;
         var rows = makeDistArray(size, int),

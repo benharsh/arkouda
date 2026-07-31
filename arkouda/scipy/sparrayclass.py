@@ -142,7 +142,7 @@ class sparray:
         if dtype_name not in NumericDTypes:
             raise TypeError(f"unsupported dtype {dtype}")
         response_arrays = generic_msg(
-            cmd=f"sparse_to_pdarrays<{self.dtype},{self.layout}>", args={"matrix": self}
+            cmd=f"sparse_to_pdarrays<{self.dtype},{self.layout}>", args={"matrix": self.name}
         )
         array_list = create_pdarrays(type_cast(str, response_arrays))
         return array_list
