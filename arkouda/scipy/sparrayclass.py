@@ -163,6 +163,41 @@ class sparray:
             args={"matrix": self, "vals": a},
         )
 
+    def to_scipy_sparse(self):
+        """
+        Convert the Arkouda sparse array to an equivalent SciPy sparse array.
+
+        Returns
+        -------
+        scipy.sparse.sparray
+            A SciPy sparse array with the same shape, values, and logical layout.
+
+        Notes
+        -----
+        SciPy sparse array classes require SciPy versions that provide
+        ``coo_array``, ``csr_array``, and ``csc_array``. If those are not
+        available, this method falls back to the corresponding sparse matrix
+        classes.
+        """
+        import scipy.sparse as sp
+
+        rows, cols, vals = (arr.to_ndarray() for arr in self.to_pdarray())
+
+        if hasattr(sp, "coo_array"):
+            coo = sp.coo_array((vals, (rows, cols)), shape=tuple(self.shape))
+            if self.layout == "CSR":
+                return sp.csr_array(coo)
+            if self.layout == "CSC":
+                return sp.csc_array(coo)
+            return coo
+
+        coo = sp.coo_matrix((vals, (rows, cols)), shape=tuple(self.shape))
+        if self.layout == "CSR":
+            return coo.tocsr()
+        if self.layout == "CSC":
+            return coo.tocsc()
+        return coo
+
 
 # creates sparray object
 #   only after:
