@@ -97,8 +97,8 @@ module MultiTypeSymEntry
         }
 
         /**
-         * Formats and returns data in this entry up to the specified threshold. 
-         * Arrays of size less than threshold will be printed in their entirety. 
+         * Formats and returns data in this entry up to the specified threshold.
+         * Arrays of size less than threshold will be printed in their entirety.
          * Arrays of size greater than or equal to threshold will print the first 3 and last 3 elements
          *
          * :arg thresh: threshold for data to return
@@ -123,7 +123,7 @@ module MultiTypeSymEntry
     }
 
     /* Casts a GenSymEntry to the specified type and returns it.
-       
+
        :arg gse: generic sym entry
        :type gse: borrowed GenSymEntry
 
@@ -134,11 +134,11 @@ module MultiTypeSymEntry
         return gse.toSymEntry(etype, dimensions);
     }
 
-    /* 
+    /*
         This is a dummy class to avoid having to talk about specific
-        instantiations of SymEntry. 
+        instantiations of SymEntry.
         GenSymEntries can contain multiple SymEntries, but they represent a singular object.
-        For example, SegArray contains the offsets and values array, but only the values are 
+        For example, SegArray contains the offsets and values array, but only the values are
         considered data.
     */
     class GenSymEntry:AbstractSymEntry
@@ -189,9 +189,9 @@ module MultiTypeSymEntry
             }
         }
 
-        /* 
-          Formats and returns data in this entry up to the specified threshold. 
-          Arrays of size less than threshold will be printed in their entirety. 
+        /*
+          Formats and returns data in this entry up to the specified threshold.
+          Arrays of size less than threshold will be printed in their entirety.
           Arrays of size greater than or equal to threshold will print the first 3 and last 3 elements
 
             :arg thresh: threshold for data to return
@@ -319,8 +319,8 @@ module MultiTypeSymEntry
         }
 
         /*
-        Formats and returns data in this entry up to the specified threshold. 
-        Arrays of size less than threshold will be printed in their entirety. 
+        Formats and returns data in this entry up to the specified threshold.
+        Arrays of size less than threshold will be printed in their entirety.
         Arrays of size greater than or equal to threshold will print the first 3 and last 3 elements
 
             :arg thresh: threshold for data to return
@@ -456,7 +456,7 @@ module MultiTypeSymEntry
      * Factory method for creating a typed SymEntry and checking mem limits
      * :arg len: the number of elements to allocate
      * :type len: int
-     * 
+     *
      * :arg t: the element type
      * :type t: type
     */
@@ -498,8 +498,8 @@ module MultiTypeSymEntry
         }
 
         /**
-         * Formats and returns data in this entry up to the specified threshold. 
-         * Arrays of size less than threshold will be printed in their entirety. 
+         * Formats and returns data in this entry up to the specified threshold.
+         * Arrays of size less than threshold will be printed in their entirety.
          * Arrays of size greater than or equal to threshold will print the first 3 and last 3 elements
          *
          * :arg thresh: threshold for data to return
@@ -736,53 +736,6 @@ module MultiTypeSymEntry
         proc deinit() {
           genLogger.debug(getModuleName(),getRoutineName(),getLineNumber(), "deinit SparseSymEntry");
         }
-    }
-
-    use CompressedSparseLayout;
-    
-    proc getParSafeSparseDom(param layout: Layout) {
-        select layout {
-            when Layout.CSR do return new csrLayout(parSafe=true);
-            when Layout.CSC do return new cscLayout(parSafe=true);
-        }
-    }
-
-    proc getParSafeDenseDom(dom, localeGrid, param layout: Layout) {
-        if layout == Layout.CSR {
-            return dom dmapped new blockDist(boundingBox=dom,
-                                             targetLocales=localeGrid,
-                                             sparseLayoutType=csrLayout(parSafe=true));
-        } else {
-            return dom dmapped new blockDist(boundingBox=dom,
-                                             targetLocales=localeGrid,
-                                             sparseLayoutType=cscLayout(parSafe=true));
-        }
-    }
-
-    proc makeParSafeSparseDomain(shape: 2*int, param matLayout: Layout) {
-      const dom = {1..shape[0], 1..shape[1]}; // TODO: change domain to be zero based?
-      select MyDmap {
-        when Dmap.defaultRectangular {
-          var spsDom: sparse subdomain(dom) dmapped getParSafeSparseDom(matLayout);
-          return (spsDom, dom);
-        }
-        when Dmap.blockDist {
-          const locsPerDim = sqrt(numLocales:real): int,
-                grid = {0..<locsPerDim, 0..<locsPerDim},
-                localeGrid = reshape(Locales[0..<grid.size], grid);
-
-          const DenseBlkDom = getParSafeDenseDom(dom, localeGrid, matLayout);
-
-          var SD: sparse subdomain(DenseBlkDom);
-          return (SD, DenseBlkDom);
-        }
-      }
-    }
-    
-    proc makeParSafeSparseArray(m: int, n: int, type eltType, param matLayout: Layout) {
-        const (sd, _) = makeParSafeSparseDomain((m, n), matLayout);
-        var arr: [sd] eltType;
-        return arr;
     }
 
     /* Symbol table entry */

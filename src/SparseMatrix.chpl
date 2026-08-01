@@ -415,10 +415,12 @@ module SparseMatrix {
             sparseMatMatMult(aBlk, bBlk, spsData);
           }
         }
-
         // Get my locale's local indices and create a sparse matrix
         // using them and the spsData computed above.
         //
+        // TODO: the 'make*SparseMat' functions create an array of size 'NNZ'.
+        // If we need to improve memory usage, could we use a SparseIndexBuffer
+        // instead?
         const locInds = A.domain.parentDom.localSubdomain();
         var cBlk = if !aggregatedSparseMatrixCreation then makeSparseMat(locInds, spsData)
                    else makeParSafeSparseMat(locInds, spsData);
@@ -429,6 +431,7 @@ module SparseMatrix {
         C.setLocalSubarray(cBlk);
       }
     }
+
     return C;
   }
 
@@ -545,19 +548,31 @@ module SparseMatrix {
 
     inline proc flush(ref rBuffer, const ref remBufferPtr, const ref myBufferIdx) {
       const (_, locid) = this.domVal.dist.chpl__locToLocIdx(here);
-      var locIdxBuf = this.domVal.locDoms[locid]!.mySparseBlock._value.createIndexBuffer(bufSize,false,false);
+      var locDomVal = this.domVal.locDoms[locid]!.mySparseBlock._value;
+      var locIdxBuf = locDomVal.createIndexBuffer(bufSize,false,false);
       for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
         assert(dstAddr == nil);
         var (i,j,_) = srcVal;
         locIdxBuf.add((i, j));
       }
       locIdxBuf.commit();
+
+      // We need a lock around this loop because another parallel 'flush'
+      // might be inserting indices, which will make the returned results from
+      // 'find' invalid.
+      //
+      // TODO:
+      // - try 'forall' loop here
+      // - is there a benefit to avoiding the second lock by adding a version
+      //   of 'bulkAdd' that also handles the values?
+      locDomVal.lockDomain();
       for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
         assert(dstAddr == nil);
         var (i,j,v) = srcVal;
-        var (_,loc) = this.domVal.locDoms[locid]!.mySparseBlock._value.find((i,j));
+        var (_,loc) = locDomVal.find((i,j));
         this.arrVal.locArr[locid]!.myElems._value.data[loc] = v;
       }
+      locDomVal.unlockDomain();
     }
   }
 
@@ -615,8 +630,8 @@ module SparseMatrix {
         }
       }
     } else {
-      forall (i,j,v) in zip(rows, cols, vals) 
-        with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A))) do 
+      forall (i,j,v) in zip(rows, cols, vals)
+        with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A))) do
           agg.copy((i,j,v));
     }
 
@@ -715,12 +730,12 @@ module SparseMatrix {
 
       sort(inds);
 
-      for ij in inds do
-        CDom += ij;
+      CDom.bulkAdd(inds, true, true);
 
       var C: [CDom] int;
+      // TODO: can this be parallel?
       for ij in inds do
-        try! C[ij] += spsData[ij];  // TODO: Should this really throw?
+        try! C[ij] = spsData[ij];  // TODO: Should this really throw?
 
       return C;
     }

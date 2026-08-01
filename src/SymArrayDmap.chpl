@@ -162,10 +162,36 @@ module SymArrayDmap {
       }
     }
 
+    proc makeParSafeSparseDomain(shape: 2*int, param matLayout: Layout) {
+      const dom = {1..shape[0], 1..shape[1]}; // TODO: change domain to be zero based?
+      select MyDmap {
+        when Dmap.defaultRectangular {
+          var spsDom: sparse subdomain(dom) dmapped getParSafeSparseDom(matLayout);
+          return (spsDom, dom);
+        }
+        when Dmap.blockDist {
+          const locsPerDim = sqrt(numLocales:real): int,
+                grid = {0..<locsPerDim, 0..<locsPerDim},
+                localeGrid = reshape(Locales[0..<grid.size], grid);
+
+          const DenseBlkDom = getParSafeDenseDom(dom, localeGrid, matLayout);
+
+          var SD: sparse subdomain(DenseBlkDom);
+          return (SD, DenseBlkDom);
+        }
+      }
+    }
+
     proc makeSparseArray(m: int, n: int, type eltType, param matLayout: Layout) {
       const (sd, _) = makeSparseDomain((m, n), matLayout);
       var arr: [sd] eltType;
       return arr;
+    }
+
+    proc makeParSafeSparseArray(m: int, n: int, type eltType, param matLayout: Layout) {
+        const (sd, _) = makeParSafeSparseDomain((m, n), matLayout);
+        var arr: [sd] eltType;
+        return arr;
     }
 
 }

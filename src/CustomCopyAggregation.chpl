@@ -47,10 +47,10 @@ module CustomCopyAggregation {
     }
   }
 
-  /* 
+  /*
     Aggregates ``copy(ref dst, src)``. Optimized for when src is local.
     Not parallel safe and is expected to be created on a per-task basis.
-    High memory usage since there are per-destination buffers. 
+    High memory usage since there are per-destination buffers.
   */
   record CustomDstAggregator {
     type elemType;
@@ -69,26 +69,26 @@ module CustomCopyAggregation {
       this.custom = true;
       if aggregate then this.agg = new CustomDstAggregatorImpl(elemType, handler);
     }
-    
-    /* 
+
+    /*
       Sets ``dst = srcVal`` in a way that aggregates such updates
       to improve communication efficiency assuming that ``dst`` is remote
-      and ``srcVal`` is local. 
+      and ``srcVal`` is local.
     */
     inline proc ref copy(ref dst: elemType, const in srcVal: elemType) {
       if aggregate then agg.copy(dst, srcVal);
                    else dst = srcVal;
     }
-    
+
     /*
-      Copy method for custom aggregator. 
+      Copy method for custom aggregator.
     */
     inline proc ref copy(const in srcVal: elemType) {
       compilerAssert(aggregate);
       agg.copy(srcVal);
     }
-    
-    /* 
+
+    /*
       Flushes the aggregator & completes the updates queued up from the
       :proc:`DstAggregator.copy` calls.
 
@@ -219,14 +219,6 @@ module CustomCopyAggregation {
       // Process remote buffer
       on Locales[loc] {
         if !isNothing(handler) then rHandler!.flush(rBuffer, remBufferPtr, myBufferIdx);
-        // for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
-        //   if !isNothing(handler) {
-        //     rHandler!.flush(dstAddr, srcVal);
-        //   }
-        //   else {
-        //     dstAddr.deref() = srcVal;
-        //   }
-        // }
       }
       if freeData {
         rBuffer.markFreed();
