@@ -549,7 +549,7 @@ module SparseMatrix {
     inline proc flush(ref rBuffer, const ref remBufferPtr, const ref myBufferIdx) {
       const (_, locid) = this.domVal.dist.chpl__locToLocIdx(here);
       var locDomVal = this.domVal.locDoms[locid]!.mySparseBlock._value;
-      var locIdxBuf = locDomVal.createIndexBuffer(bufSize,false,false);
+      var locIdxBuf = locDomVal.dsiCreateIndexBuffer(bufSize,false,false);
       for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
         assert(dstAddr == nil);
         var (i,j,_) = srcVal;
