@@ -22,6 +22,7 @@ __all__ = [
 
 logger = get_arkouda_logger(name="sparsematrix")
 
+
 @typechecked
 def random_sparse_matrix(
     size: int, density: float, layout: str, dtype: Union[type, str] = int64

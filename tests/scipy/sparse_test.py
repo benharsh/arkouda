@@ -236,7 +236,8 @@ class TestSparse:
 
         mat = create_sparse_matrix(10, rows, cols, vals, "CSR")
         conv = mat.to_scipy_sparse()
-        expected = sp.csr_array((vals.to_ndarray(), (rows.to_ndarray(), cols.to_ndarray())), shape=(10, 10))
+        info = (vals.to_ndarray(), (rows.to_ndarray(), cols.to_ndarray()))
+        expected = sp.csr_array(info, shape=(10, 10))
 
         assert sp.issparse(conv)
         assert conv.shape == expected.shape
