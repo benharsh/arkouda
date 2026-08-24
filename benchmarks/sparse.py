@@ -5,12 +5,11 @@ import argparse
 import time
 import numpy as np
 from scipy.sparse import coo_array, csr_matrix, find
-from arkouda.scipy.sparsematrix import (
-    create_sparse_matrix, sparse_matrix_matrix_mult
-)
+from arkouda.scipy.sparsematrix import create_sparse_matrix, sparse_matrix_matrix_mult
 
 # TODO: Add support for 'float64'
-TYPES = ("int64", )
+TYPES = ("int64",)
+
 
 def compare_scipy(left, right, rtol=1e-9, atol=0.0, equal_nan=False):
     if left.shape != right.shape:
@@ -34,16 +33,16 @@ def time_ak_sparse(N, trials, dtype, seed):
     cfg = ak.get_config()
     print("numLocales = {}, numNodes {}, N = {:,}".format(cfg["numLocales"], cfg["numNodes"], N))
 
-    nnz = N*10
+    nnz = N * 10
 
-    rows = ak.randint(1, N-1, nnz, seed=seed)
-    cols = ak.randint(1, N-1, nnz, seed=seed*2)
-    rows,cols = ak.unique([rows,cols])
+    rows = ak.randint(1, N - 1, nnz, seed=seed)
+    cols = ak.randint(1, N - 1, nnz, seed=seed * 2)
+    rows, cols = ak.unique([rows, cols])
 
     if dtype == "int64":
-        vals = ak.randint(1, len(rows), len(rows), seed=seed*3)
+        vals = ak.randint(1, len(rows), len(rows), seed=seed * 3)
     elif dtype == "float64":
-        vals = ak.uniform(len(rows), seed=seed*3) + 0.5
+        vals = ak.uniform(len(rows), seed=seed * 3) + 0.5
 
     csr_times = []
     csc_times = []
@@ -71,16 +70,16 @@ def time_np_sparse(N, trials, dtype, seed):
     print(">>> numpy {} sparse".format(dtype))
     print("N = {:,}".format(N))
 
-    nnz = N*10
+    nnz = N * 10
 
-    rows = ak.randint(1, N-1, nnz, seed=seed)
-    cols = ak.randint(1, N-1, nnz, seed=seed*2)
-    rows,cols = ak.unique([rows,cols])
+    rows = ak.randint(1, N - 1, nnz, seed=seed)
+    cols = ak.randint(1, N - 1, nnz, seed=seed * 2)
+    rows, cols = ak.unique([rows, cols])
 
     if dtype == "int64":
-        vals = ak.randint(1, len(rows), len(rows), seed=seed*3)
+        vals = ak.randint(1, len(rows), len(rows), seed=seed * 3)
     elif dtype == "float64":
-        vals = ak.uniform(len(rows), seed=seed*3) + 0.5
+        vals = ak.uniform(len(rows), seed=seed * 3) + 0.5
 
     rows = rows.to_ndarray()
     cols = cols.to_ndarray()
@@ -92,11 +91,11 @@ def time_np_sparse(N, trials, dtype, seed):
 
     for i in range(trials):
         start = time.time()
-        csr = coo_array((vals, (rows, cols)), shape=(N,N)).tocsr()
+        csr = coo_array((vals, (rows, cols)), shape=(N, N)).tocsr()
         csr_times.append(time.time() - start)
 
         start = time.time()
-        csc = coo_array((vals, (cols, rows)), shape=(N,N)).tocsc()
+        csc = coo_array((vals, (cols, rows)), shape=(N, N)).tocsc()
         csc_times.append(time.time() - start)
 
         start = time.time()
@@ -111,26 +110,30 @@ def time_np_sparse(N, trials, dtype, seed):
 def check_correctness(dtype):
     seed = 1234
     N = 10_000
-    nnz = N*10
+    nnz = N * 10
 
-    rows = ak.randint(1, N-1, nnz, seed=seed)
-    cols = ak.randint(1, N-1, nnz, seed=seed*2)
-    rows,cols = ak.unique([rows,cols])
+    rows = ak.randint(1, N - 1, nnz, seed=seed)
+    cols = ak.randint(1, N - 1, nnz, seed=seed * 2)
+    rows, cols = ak.unique([rows, cols])
 
     if dtype == "int64":
-        vals = ak.randint(1, len(rows), len(rows), seed=seed*3)
+        vals = ak.randint(1, len(rows), len(rows), seed=seed * 3)
     elif dtype == "float64":
-        vals = ak.uniform(len(rows), seed=seed*3) + 0.5
+        vals = ak.uniform(len(rows), seed=seed * 3) + 0.5
 
     csr = create_sparse_matrix(N, rows, cols, vals, layout="CSR")
     csc = create_sparse_matrix(N, cols, rows, vals, layout="CSC")
     result = sparse_matrix_matrix_mult(csc, csr)
 
-    scipy_csr = coo_array((vals.to_ndarray(), (rows.to_ndarray(), cols.to_ndarray())), shape=(N, N)).tocsr()
+    scipy_csr = coo_array(
+        (vals.to_ndarray(), (rows.to_ndarray(), cols.to_ndarray())), shape=(N, N)
+    ).tocsr()
     ak_csr = csr.to_scipy_sparse()
     assert compare_scipy(scipy_csr, ak_csr), "CSR matrices do not match"
 
-    scipy_csc = coo_array((vals.to_ndarray(), (cols.to_ndarray(), rows.to_ndarray())), shape=(N, N)).tocsc()
+    scipy_csc = coo_array(
+        (vals.to_ndarray(), (cols.to_ndarray(), rows.to_ndarray())), shape=(N, N)
+    ).tocsc()
     ak_csc = csc.to_scipy_sparse()
     assert compare_scipy(scipy_csc, ak_csc), "CSC matrices do not match"
 
@@ -140,16 +143,11 @@ def check_correctness(dtype):
 
 
 def create_parser():
-    parser = argparse.ArgumentParser(
-        description="Benchmark sparse matrix creation and multiplication."
-    )
+    parser = argparse.ArgumentParser(description="Benchmark sparse matrix creation and multiplication.")
     parser.add_argument("hostname", type=str, help="Name of the Arkouda server")
     parser.add_argument("port", type=int, help="Port of the Arkouda server")
     parser.add_argument("-n", "--size", type=int, default=(10**6), help="Size of the sparse matrices")
-    parser.add_argument(
-        "-t", "--trials", type=int, default=3,
-        help="Number of trials for benchmarking"
-    )
+    parser.add_argument("-t", "--trials", type=int, default=3, help="Number of trials for benchmarking")
     parser.add_argument(
         "-d", "--dtype", default="int64", help="Dtype of array ({})".format(", ".join(TYPES))
     )
@@ -173,6 +171,7 @@ def create_parser():
 
 if __name__ == "__main__":
     import sys
+
     args = create_parser().parse_args()
 
     if args.dtype not in TYPES:

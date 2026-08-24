@@ -14,11 +14,7 @@ from arkouda.numpy.pdarrayclass import pdarray
 from arkouda.scipy.sparrayclass import create_sparray, sparray
 
 
-__all__ = [
-    "random_sparse_matrix",
-    "sparse_matrix_matrix_mult",
-    "create_sparse_matrix"
-    ]
+__all__ = ["random_sparse_matrix", "sparse_matrix_matrix_mult", "create_sparse_matrix"]
 
 logger = get_arkouda_logger(name="sparsematrix")
 
