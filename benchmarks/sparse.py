@@ -99,7 +99,7 @@ def time_np_sparse(N, trials, dtype, seed):
         csc_times.append(time.time() - start)
 
         start = time.time()
-        result = csr_matrix.dot(csc, csr).tocsr()
+        result = csc.dot(csr).tocsr()
         multiplication_times.append(time.time() - start)
 
     print("Average CSR time = {:.4f} seconds".format(np.mean(csr_times)))
@@ -137,7 +137,7 @@ def check_correctness(dtype):
     ak_csc = csc.to_scipy_sparse()
     assert compare_scipy(scipy_csc, ak_csc), "CSC matrices do not match"
 
-    scipy_result = csr_matrix.dot(scipy_csc, scipy_csr).tocsr()
+    scipy_result = scipy_csc.dot(scipy_csr).tocsr()
     ak_result = result.to_scipy_sparse()
     assert compare_scipy(scipy_result, ak_result), "Multiplication results do not match"
 
@@ -188,4 +188,8 @@ if __name__ == "__main__":
     print("number of trials = ", args.trials)
 
     time_ak_sparse(args.size, args.trials, args.dtype, args.seed)
+
+    if args.numpy:
+        time_np_sparse(args.size, args.trials, args.dtype, args.seed)
+
     sys.exit(0)
