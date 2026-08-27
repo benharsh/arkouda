@@ -6,6 +6,8 @@ module SparseMatrix {
   use CompressedSparseLayout;
   use CommAggregation;
   use CustomCopyAggregation;
+  use PrivateDist;
+  use ChapelLocks;
 
   config param aggregatedSparseMatrixCreation = true;
 
@@ -422,8 +424,7 @@ module SparseMatrix {
         // If we need to improve memory usage, could we use a SparseIndexBuffer
         // instead?
         const locInds = A.domain.parentDom.localSubdomain();
-        var cBlk = if !aggregatedSparseMatrixCreation then makeSparseMat(locInds, spsData)
-                   else makeParSafeSparseMat(locInds, spsData);
+        var cBlk = makeSparseMat(locInds, spsData);
 
         // Stitch the local portions back together into the global-view
         //
@@ -504,17 +505,10 @@ module SparseMatrix {
         errorClass="InvalidArgumentError"
         );
 
-    if !aggregatedSparseMatrixCreation {
-      var (SD, dense) = makeSparseDomain(shape, layout);
-      var A: [SD] eltType;
-      addElementsToSparseArray(A, SD, rows, cols, vals);
-      return A;
-    } else {
-      var (SD, dense) = makeParSafeSparseDomain(shape, layout);
-      var A: [SD] eltType;
-      addElementsToSparseArray(A, SD, rows, cols, vals);
-      return A;
-    }
+    var (SD, dense) = makeSparseDomain(shape, layout);
+    var A: [SD] eltType;
+    addElementsToSparseArray(A, SD, rows, cols, vals);
+    return A;
   }
 
   proc addElementsToSparseArray(ref A, ref SD, const ref rows,const ref cols,
@@ -540,13 +534,17 @@ module SparseMatrix {
   class DestinationHandler {
     var domVal;
     var arrVal;
+    var lockVal;
 
-    proc init(domVal, arrVal) {
+    proc init(domVal, arrVal, lockVal) {
       this.domVal = domVal;
       this.arrVal = arrVal;
+      this.lockVal = lockVal;
     }
 
     inline proc flush(ref rBuffer, const ref remBufferPtr, const ref myBufferIdx) {
+      lockVal.dsiAccess(here.id).lock();
+
       const (_, locid) = this.domVal.dist.chpl__locToLocIdx(here);
       var locDomVal = this.domVal.locDoms[locid]!.mySparseBlock._value;
       var locIdxBuf = locDomVal.dsiCreateIndexBuffer(bufSize,false,false);
@@ -557,37 +555,38 @@ module SparseMatrix {
       }
       locIdxBuf.commit();
 
-      // We need a lock around this loop because another parallel 'flush'
-      // might be inserting indices, which will make the returned results from
-      // 'find' invalid.
+      // We use a lock around the entire 'flush' call because another parallel
+      // 'flush' might be inserting indices, which will make the returned
+      // results from 'find' invalid.
       //
       // TODO:
       // - try 'forall' loop here
-      // - is there a benefit to avoiding the second lock by adding a version
-      //   of 'bulkAdd' that also handles the values?
-      locDomVal.lockDomain();
+      // - can we create a version of bulkAdd that handles the values as well?
       for (dstAddr, srcVal) in rBuffer.localIter(remBufferPtr, myBufferIdx) {
         assert(dstAddr == nil);
         var (i,j,v) = srcVal;
         var (_,loc) = locDomVal.find((i,j));
         this.arrVal.locArr[locid]!.myElems._value.data[loc] = v;
       }
-      locDomVal.unlockDomain();
+
+      lockVal.dsiAccess(here.id).unlock();
     }
   }
 
   class SourceHandler {
     var domVal;
     var arrVal;
+    var lockVal;
     type elemType = (int,int,int);
 
-    proc init(D, A) {
+    proc init(D, A, locks) {
       this.domVal = D._value;
       this.arrVal = A._value;
+      this.lockVal = locks._value;
     }
 
     proc sourceCopy() {
-      return new unmanaged DestinationHandler(domVal,arrVal);
+      return new unmanaged DestinationHandler(domVal,arrVal, lockVal);
     }
 
     proc getDestinationLocale(val: elemType) {
@@ -630,8 +629,9 @@ module SparseMatrix {
         }
       }
     } else {
+      var locks : [PrivateSpace] chpl_LocalSpinlock;
       forall (i,j,v) in zip(rows, cols, vals)
-        with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A))) do
+        with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A, locks))) do
           agg.copy((i,j,v));
     }
 
@@ -707,29 +707,6 @@ module SparseMatrix {
 
       sort(inds);
 
-      for ij in inds do
-        CDom += ij;
-
-      var C: [CDom] int;
-      for ij in inds do
-        try! C[ij] += spsData[ij];  // TODO: Should this really throw?
-
-      return C;
-    }
-
-    // create a new sparse matrix from a map from sparse indices to values
-    //
-    proc makeParSafeSparseMat(parentDom, spsData) {
-      use ArkoudaSparseMatrixCompat;
-      use Sort;
-
-      var CDom: sparse subdomain(parentDom) dmapped getParSafeSparseDom(Layout.CSR);
-      var inds: [0..<spsData.size] 2*int;
-      for (idx, i) in zip(spsData.keys(), 0..) do
-        inds[i] = idx;
-
-      sort(inds);
-
       CDom.bulkAdd(inds, true, true);
 
       var C: [CDom] int;
@@ -739,7 +716,6 @@ module SparseMatrix {
 
       return C;
     }
-
 
     // create a new sparse matrix from a collection of nonzero indices
     // (nnzs) and values (vals)
