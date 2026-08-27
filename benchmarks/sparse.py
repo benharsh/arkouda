@@ -122,21 +122,20 @@ def check_correctness(dtype):
         vals = ak.uniform(len(rows), seed=seed * 3) + 0.5
 
     csr = create_sparse_matrix(N, rows, cols, vals, layout="CSR")
-    csc = create_sparse_matrix(N, cols, rows, vals, layout="CSC")
-    result = sparse_matrix_matrix_mult(csc, csr)
-
     scipy_csr = coo_array(
         (vals.to_ndarray(), (rows.to_ndarray(), cols.to_ndarray())), shape=(N, N)
     ).tocsr()
     ak_csr = csr.to_scipy_sparse()
     assert compare_scipy(scipy_csr, ak_csr), "CSR matrices do not match"
 
+    csc = create_sparse_matrix(N, cols, rows, vals, layout="CSC")
     scipy_csc = coo_array(
         (vals.to_ndarray(), (cols.to_ndarray(), rows.to_ndarray())), shape=(N, N)
     ).tocsc()
     ak_csc = csc.to_scipy_sparse()
     assert compare_scipy(scipy_csc, ak_csc), "CSC matrices do not match"
 
+    result = sparse_matrix_matrix_mult(csc, csr)
     scipy_result = scipy_csc.dot(scipy_csr).tocsr()
     ak_result = result.to_scipy_sparse()
     assert compare_scipy(scipy_result, ak_result), "Multiplication results do not match"
