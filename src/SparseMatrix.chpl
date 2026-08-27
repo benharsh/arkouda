@@ -528,22 +528,34 @@ module SparseMatrix {
     }
   }
 
+  //
+  // We need a lock per locale to ensure that the flush() method of
+  // DestinationHandler is thread-safe. Wrapping a PrivateDist array in a
+  // class is the most expedient way to achieve this.
+  //
+  // This may result in an extra GET or two when accessing the 'data' field.
+  //
+  class LockHelper {
+    var data : [PrivateSpace] chpl_LocalSpinlock;
+  }
+
   use ChplConfig;
   config param bufSize = 1024;
 
   class DestinationHandler {
     var domVal;
     var arrVal;
-    var lockVal;
+    var lockObj;
 
-    proc init(domVal, arrVal, lockVal) {
+    proc init(domVal, arrVal, lockObj) {
       this.domVal = domVal;
       this.arrVal = arrVal;
-      this.lockVal = lockVal;
+      this.lockObj = lockObj;
     }
 
     inline proc flush(ref rBuffer, const ref remBufferPtr, const ref myBufferIdx) {
-      lockVal.dsiAccess(here.id).lock();
+      ref lock = lockObj.data[here.id];
+      lock.lock();
 
       const (_, locid) = this.domVal.dist.chpl__locToLocIdx(here);
       var locDomVal = this.domVal.locDoms[locid]!.mySparseBlock._value;
@@ -569,24 +581,24 @@ module SparseMatrix {
         this.arrVal.locArr[locid]!.myElems._value.data[loc] = v;
       }
 
-      lockVal.dsiAccess(here.id).unlock();
+      lock.unlock();
     }
   }
 
   class SourceHandler {
     var domVal;
     var arrVal;
-    var lockVal;
+    var lockObj;
     type elemType = (int,int,int);
 
     proc init(D, A, locks) {
       this.domVal = D._value;
       this.arrVal = A._value;
-      this.lockVal = locks._value;
+      this.lockObj = locks;
     }
 
     proc sourceCopy() {
-      return new unmanaged DestinationHandler(domVal,arrVal, lockVal);
+      return new unmanaged DestinationHandler(domVal,arrVal, lockObj);
     }
 
     proc getDestinationLocale(val: elemType) {
@@ -629,10 +641,11 @@ module SparseMatrix {
         }
       }
     } else {
-      var locks : [PrivateSpace] chpl_LocalSpinlock;
+      var locks = new unmanaged LockHelper();
       forall (i,j,v) in zip(rows, cols, vals)
         with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A, locks))) do
           agg.copy((i,j,v));
+      delete locks;
     }
 
   }
