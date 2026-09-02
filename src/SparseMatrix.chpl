@@ -556,6 +556,7 @@ module SparseMatrix {
     inline proc flush(ref rBuffer, const ref remBufferPtr, const ref myBufferIdx) {
       ref lock = lockObj.data[here.id];
       lock.lock();
+      defer lock.unlock();
 
       const (_, locid) = this.domVal.dist.chpl__locToLocIdx(here);
       var locDomVal = this.domVal.locDoms[locid]!.mySparseBlock._value;
@@ -580,8 +581,6 @@ module SparseMatrix {
         var (_,loc) = locDomVal.find((i,j));
         this.arrVal.locArr[locid]!.myElems._value.data[loc] = v;
       }
-
-      lock.unlock();
     }
   }
 
@@ -642,10 +641,11 @@ module SparseMatrix {
       }
     } else {
       var locks = new unmanaged LockHelper();
+      defer delete locks;
+
       forall (i,j,v) in zip(rows, cols, vals)
         with (var agg = new CustomDstAggregator(new shared SourceHandler(SD, A, locks))) do
           agg.copy((i,j,v));
-      delete locks;
     }
 
   }
