@@ -149,6 +149,51 @@ class ArkoudaArray(ArkoudaExtensionArray, ExtensionArray):
 
         return cls(ak_array(scalars, dtype=dtype, copy=copy))
 
+    def _cast_pointwise_result(self, values):
+        """
+        Wrap the result of a pointwise operation (e.g. ``map``) in an ``ArkoudaArray``.
+
+        pandas >= 3.1 calls this from ``ExtensionArray.map``. The default
+        implementation casts the result back to ``self.dtype`` via
+        ``_from_scalars``, which silently turns NaN into the minimum int64 value
+        when an integer array is mapped through a dict with missing keys.
+
+        Instead, the natural dtype of the result is kept. It is only cast back to
+        ``self.dtype`` when the same dtype kind is involved and no values change.
+
+        Parameters
+        ----------
+        values : sequence
+            The result of the pointwise operation.
+
+        Returns
+        -------
+        ArkoudaArray or ExtensionArray or numpy.ndarray
+            An ``ArkoudaArray`` for numeric and boolean results; otherwise the
+            result of the pandas default implementation.
+        """
+        from arkouda.numpy.pdarraycreation import array as ak_array
+
+        if isinstance(values, np.ndarray) and values.dtype.kind in "biuf":
+            try:
+                target = np.dtype(self.dtype.numpy_dtype)
+            except (AttributeError, TypeError):
+                target = None
+
+            same_kind = target is not None and (
+                (target.kind in "iu" and values.dtype.kind in "iu")
+                or (target.kind == "f" and values.dtype.kind == "f")
+            )
+            if same_kind and target != values.dtype:
+                casted = values.astype(target)
+                is_float = values.dtype.kind == "f"
+                if np.array_equal(casted.astype(values.dtype), values, equal_nan=is_float):
+                    values = casted
+
+            return type(self)(ak_array(values))
+
+        return super()._cast_pointwise_result(values)
+
     def __getitem__(self, key: Any) -> Any:
         """
         Retrieve one or more values using a pandas/NumPy-style indexer.
