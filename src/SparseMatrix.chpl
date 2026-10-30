@@ -386,11 +386,21 @@ module SparseMatrix {
   // of nonzeroes to be passed in and updated rather than assuming that
   // the multiplication is the first/only step.
   //
-  proc sparseMatMatMult(A, B, ref spsData) {
+  proc sparseMatMatMult(A, B, ref spsData : sparseMatDat(?)) {
     forall ac_br in A.cols() with (merge(sparseMatDat(A.eltType)) reduce spsData) do
       for (ar, a) in A.rowsAndVals(ac_br) do
         for (bc, b) in B.colsAndVals(ac_br) do
           spsData.add((ar, bc), a * b);
+  }
+
+  proc sparseMatMatMult(A, B, ref spsData : [] multData(?)) {
+    var counter : atomic int;
+    forall ac_br in A.cols() with (ref spsData, const tid = counter.fetchAdd(1)) {
+      ref tls = spsData[tid];
+      for (ar, a) in A.rowsAndVals(ac_br) do
+        for (bc, b) in B.colsAndVals(ac_br) do
+          tls.add((ar, bc), a * b);
+    }
   }
 
   proc sparseMatMatMult(A, B) where (!A.chpl_isNonDistributedArray() &&
@@ -401,7 +411,8 @@ module SparseMatrix {
     ref targLocs = A.targetLocales();
     coforall (locRow, locCol) in targLocs.domain {
       on targLocs[locRow, locCol] {
-        var spsData: sparseMatDat(A.eltType);
+        //var spsData: sparseMatDat(A.eltType);
+        var spsData : [0..<here.maxTaskPar] multData(A.eltType);
 
         for srcloc in targLocs.dim(0) {
           // Make a local copy of the remote blocks of A and B; on my branch
@@ -685,6 +696,25 @@ module SparseMatrix {
       }
     }
 
+    record multData {
+      type eltType;
+      var dom : domain(1);
+      // should these be separate arrays?
+      var vals : [dom] (2*int, eltType);
+      var count : int;
+
+      proc ref add(idx: 2*int, val: eltType) {
+        if val != 0 {
+          if count == vals.size {
+            const n = max(10, vals.size*2);
+            dom = {0..#n};
+          }
+          vals[count] = (idx, val);
+          count += 1;
+        }
+      }
+    }
+
 
     proc emptySparseDomLike(Mat) {
       var ResDom: sparse subdomain(Mat.domain.parentDom);
@@ -712,7 +742,7 @@ module SparseMatrix {
 
     // create a new sparse matrix from a map from sparse indices to values
     //
-    proc makeSparseMat(parentDom, spsData) {
+    proc makeSparseMat(parentDom, spsData: sparseMatDat(?)) {
       use ArkoudaSparseMatrixCompat;
       use Sort;
 
@@ -729,6 +759,36 @@ module SparseMatrix {
       // TODO: can this be parallel?
       for ij in inds do
         try! C[ij] = spsData[ij];  // TODO: Should this really throw?
+
+      return C;
+    }
+
+    proc makeSparseMat(parentDom, spsData: [] multData(?)) {
+      use ArkoudaSparseMatrixCompat;
+      use Sort;
+      const total = + reduce spsData.count;
+
+      var CDom: sparse subdomain(parentDom) dmapped getSparseDom(Layout.CSR);
+      var inds: [0..<total] 2*int;
+      var start = 0;
+      for dat in spsData {
+        for (idx, i) in zip(dat.vals[0..<dat.count], start..) do
+          inds[i] = idx(0);
+        start += dat.count;
+      }
+      assert(start == total);
+
+      sort(inds);
+
+      CDom.bulkAdd(inds, true, false);
+
+      var C: [CDom] spsData[0].eltType;
+      // TODO: can this be parallel?
+      // not while we have duplicate indices, unless we somehow shift the
+      // indices around so all duplicates are contained within a single multData?
+      for dat in spsData do
+        for (idx, val) in dat.vals[0..<dat.count] do
+          try! C[idx] += val;  // TODO: Should this really throw?
 
       return C;
     }
